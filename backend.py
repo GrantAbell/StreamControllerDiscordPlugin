@@ -1,5 +1,7 @@
+import io
 import json
 
+import requests
 from streamcontroller_plugin_tools import BackendBase
 
 from loguru import logger as log
@@ -292,6 +294,35 @@ class Backend(BackendBase):
         self.discord_client.unsubscribe(commands.SPEAKING_START, args)
         self.discord_client.unsubscribe(commands.SPEAKING_STOP, args)
         return True
+
+    # ------------------------------------------------------------------
+    # CDN fetch helpers — called from the frontend's thread pool so the
+    # HTTP request happens off the main thread without blocking rpyc.
+    # ------------------------------------------------------------------
+
+    def fetch_avatar(self, user_id: str, avatar_hash: str) -> bytes | None:
+        """Fetch a Discord user avatar from the CDN and return the raw bytes."""
+        if avatar_hash:
+            url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
+        else:
+            url = "https://cdn.discordapp.com/embed/avatars/0.png"
+        try:
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as ex:
+            log.error(f"Failed to fetch avatar for {user_id}: {ex}")
+            return None
+
+    def fetch_guild_icon(self, icon_url: str) -> bytes | None:
+        """Fetch a guild icon from the CDN and return the raw bytes."""
+        try:
+            resp = requests.get(icon_url, timeout=10)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as ex:
+            log.error(f"Failed to fetch guild icon: {ex}")
+            return None
 
     def close(self):
         if self.discord_client:

@@ -2,7 +2,6 @@ import io
 import math
 from enum import StrEnum
 
-import requests
 from loguru import logger as log
 from PIL import Image, ImageDraw
 
@@ -196,9 +195,6 @@ class ChangeVoiceChannel(DiscordCore):
         # Subscribe to the configured channel and fetch initial state
         self._start_watching_configured_channel()
 
-    # ------------------------------------------------------------------
-    # Persistent channel subscription
-    # ------------------------------------------------------------------
 
     def _start_watching_configured_channel(self):
         """Subscribe to voice state events and fetch fresh data for the configured channel.
@@ -238,10 +234,6 @@ class ChangeVoiceChannel(DiscordCore):
                 self.backend.get_channel(channel)
         except Exception as ex:
             log.error(f"Failed to subscribe to voice states: {ex}")
-
-    # ------------------------------------------------------------------
-    # Voice channel select
-    # ------------------------------------------------------------------
 
     def _on_voice_channel_select(self, *args, **kwargs):
         if not self.backend:
@@ -288,9 +280,7 @@ class ChangeVoiceChannel(DiscordCore):
             self._start_watching_configured_channel()
             self._render_button()  # Immediate render while waiting for GET_CHANNEL reply
 
-    # ------------------------------------------------------------------
     # Voice state events (join/leave) — used only as refresh triggers
-    # ------------------------------------------------------------------
     # Discord's VOICE_STATE_CREATE/DELETE data contains no channel_id, so
     # we cannot determine which channel the event belongs to directly.
     # Instead we use the event as a signal to re-fetch GET_CHANNEL for the
@@ -313,10 +303,7 @@ class ChangeVoiceChannel(DiscordCore):
         except Exception as ex:
             log.error(f"Failed to refresh channel on voice state delete: {ex}")
 
-    # ------------------------------------------------------------------
     # Speaking events
-    # ------------------------------------------------------------------
-
     def _on_speaking_start(self, *args, **kwargs):
         data = args[1] if len(args) > 1 else None
         if not data:
@@ -337,10 +324,7 @@ class ChangeVoiceChannel(DiscordCore):
         self._speaking.discard(user_id)
         self._render_button()
 
-    # ------------------------------------------------------------------
     # Channel / guild info
-    # ------------------------------------------------------------------
-
     def _on_get_channel(self, *args, **kwargs):
         data = args[1] if len(args) > 1 else None
         if not data:
@@ -411,19 +395,22 @@ class ChangeVoiceChannel(DiscordCore):
             self._render_button()
 
     def _fetch_guild_icon(self, icon_url: str):
+        image_bytes = None
         try:
-            resp = requests.get(icon_url, timeout=10)
-            resp.raise_for_status()
-            self._guild_icon_image = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+            image_bytes = self.backend.fetch_guild_icon(icon_url)
         except Exception as ex:
             log.error(f"Failed to fetch guild icon: {ex}")
+        if image_bytes:
+            try:
+                self._guild_icon_image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+            except Exception as ex:
+                log.error(f"Failed to decode guild icon: {ex}")
+                self._guild_icon_image = None
+        else:
             self._guild_icon_image = None
         self._render_button()
 
-    # ------------------------------------------------------------------
     # Avatar fetching
-    # ------------------------------------------------------------------
-
     def _submit_avatar_fetch(self, user_id: str):
         """Submit an avatar fetch task if not already cached or in-progress."""
         user = self._users.get(user_id)
@@ -438,25 +425,20 @@ class ChangeVoiceChannel(DiscordCore):
         user = self._users.get(user_id)
         if not user:
             return
-        avatar_hash = user.get("avatar_hash")
-        if avatar_hash:
-            url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
-        else:
-            # Default Discord avatar (based on discriminator bucket)
-            url = "https://cdn.discordapp.com/embed/avatars/0.png"
+        image_bytes = None
         try:
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            user["avatar_img"] = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+            image_bytes = self.backend.fetch_avatar(user_id, user.get("avatar_hash"))
         except Exception as ex:
             log.error(f"Failed to fetch avatar for {user_id}: {ex}")
+        if image_bytes:
+            try:
+                user["avatar_img"] = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+            except Exception as ex:
+                log.error(f"Failed to decode avatar for {user_id}: {ex}")
         self._fetching_avatars.discard(user_id)
         self._render_button()
 
-    # ------------------------------------------------------------------
     # Rendering
-    # ------------------------------------------------------------------
-
     def display_icon(self):
         self._render_button()
 
@@ -467,9 +449,10 @@ class ChangeVoiceChannel(DiscordCore):
             and self._connected_channel_id == configured
         )
 
-        self.set_top_label("")
-        self.set_center_label("")
-        self.set_bottom_label("")
+        # Only clear the label position this button manages — leave other positions
+        # untouched so users' own labels in those spots are not erased.
+        position = self._label_position_row.get_value() or "bottom"
+        self.set_label("", position=position)
 
         if connected:
             # Trigger fetches for any users who joined before avatars were loaded
@@ -522,20 +505,13 @@ class ChangeVoiceChannel(DiscordCore):
                 # Empty channel, no guild icon — voice icon + optional name label
                 super().display_icon()
                 label_text = self._guild_name or ""
-                position = self._label_position_row.get_value() or "bottom"
-                for pos in ("top", "center", "bottom"):
-                    if pos == position and label_text:
-                        self.set_label(
-                            label_text, position=pos,
-                            font_size=8, outline_width=2,
-                            outline_color=[0, 0, 0, 255],
-                        )
-                    else:
-                        self.set_label("", position=pos)
+                if label_text:
+                    self.set_label(
+                        label_text, position=position,
+                        font_size=8, outline_width=2,
+                        outline_color=[0, 0, 0, 255],
+                    )
 
-    # ------------------------------------------------------------------
-    # Config UI
-    # ------------------------------------------------------------------
 
     def create_generative_ui(self):
         self._channel_row = EntryRow(

@@ -23,7 +23,12 @@ from .actions.TogglePTT import TogglePTT
 from .actions.UserVolume import UserVolume
 
 # Import event IDs
-from .discordrpc.commands import VOICE_CHANNEL_SELECT, VOICE_SETTINGS_UPDATE, GET_CHANNEL, GET_GUILD, SPEAKING_START, SPEAKING_STOP, VOICE_STATE_CREATE, VOICE_STATE_DELETE
+from .discordrpc.commands import (
+    VOICE_CHANNEL_SELECT, VOICE_SETTINGS_UPDATE,
+    GET_CHANNEL, GET_GUILD,
+    SPEAKING_START, SPEAKING_STOP,
+    VOICE_STATE_CREATE, VOICE_STATE_DELETE,
+)
 
 
 class PluginTemplate(PluginBase):
