@@ -190,3 +190,7 @@ class AsyncDiscord:
     def get_channel(self, channel_id: str):
         """Get channel information including voice states for voice channels."""
         self._send_rpc_command(GET_CHANNEL, {"channel_id": channel_id})
+
+    def get_guild(self, guild_id: str):
+        """Get guild information including name and icon URL."""
+        self._send_rpc_command(GET_GUILD, {"guild_id": guild_id})

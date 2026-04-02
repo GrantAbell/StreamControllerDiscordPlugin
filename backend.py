@@ -76,6 +76,8 @@ class Backend(BackendBase):
                 self.frontend.trigger_event(commands.VOICE_CHANNEL_SELECT, event.get("data"))
             case commands.GET_CHANNEL:
                 self.frontend.trigger_event(commands.GET_CHANNEL, event.get("data"))
+            case commands.GET_GUILD:
+                self.frontend.trigger_event(commands.GET_GUILD, event.get("data"))
 
     def _update_tokens(self, access_token: str = "", refresh_token: str = ""):
         self.access_token = access_token
@@ -243,6 +245,14 @@ class Backend(BackendBase):
         self.discord_client.get_channel(channel_id)
         return True
 
+    def get_guild(self, guild_id: str) -> bool:
+        """Fetch guild information including name and icon URL."""
+        if not self._ensure_connected():
+            log.warning("Discord client not connected, cannot get guild")
+            return False
+        self.discord_client.get_guild(guild_id)
+        return True
+
     def subscribe_voice_states(self, channel_id: str) -> bool:
         """Subscribe to voice state events for a specific channel."""
         if not self._ensure_connected():
@@ -262,6 +272,25 @@ class Backend(BackendBase):
         self.discord_client.unsubscribe(commands.VOICE_STATE_CREATE, args)
         self.discord_client.unsubscribe(commands.VOICE_STATE_DELETE, args)
         self.discord_client.unsubscribe(commands.VOICE_STATE_UPDATE, args)
+        return True
+
+    def subscribe_speaking(self, channel_id: str) -> bool:
+        """Subscribe to speaking start/stop events for a specific channel."""
+        if not self._ensure_connected():
+            log.warning("Discord client not connected, cannot subscribe to speaking events")
+            return False
+        args = {"channel_id": channel_id}
+        self.discord_client.subscribe(commands.SPEAKING_START, args)
+        self.discord_client.subscribe(commands.SPEAKING_STOP, args)
+        return True
+
+    def unsubscribe_speaking(self, channel_id: str) -> bool:
+        """Unsubscribe from speaking events for a specific channel."""
+        if not self._ensure_connected():
+            return False
+        args = {"channel_id": channel_id}
+        self.discord_client.unsubscribe(commands.SPEAKING_START, args)
+        self.discord_client.unsubscribe(commands.SPEAKING_STOP, args)
         return True
 
     def close(self):

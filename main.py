@@ -23,7 +23,7 @@ from .actions.TogglePTT import TogglePTT
 from .actions.UserVolume import UserVolume
 
 # Import event IDs
-from .discordrpc.commands import VOICE_CHANNEL_SELECT, VOICE_SETTINGS_UPDATE, GET_CHANNEL
+from .discordrpc.commands import VOICE_CHANNEL_SELECT, VOICE_SETTINGS_UPDATE, GET_CHANNEL, GET_GUILD, SPEAKING_START, SPEAKING_STOP, VOICE_STATE_CREATE, VOICE_STATE_DELETE
 
 
 class PluginTemplate(PluginBase):
@@ -91,10 +91,40 @@ class PluginTemplate(PluginBase):
             event_id_suffix=GET_CHANNEL,
         )
 
+        get_guild = EventHolder(
+            plugin_base=self,
+            event_id_suffix=GET_GUILD,
+        )
+
+        speaking_start = EventHolder(
+            plugin_base=self,
+            event_id_suffix=SPEAKING_START,
+        )
+
+        speaking_stop = EventHolder(
+            plugin_base=self,
+            event_id_suffix=SPEAKING_STOP,
+        )
+
+        voice_state_create = EventHolder(
+            plugin_base=self,
+            event_id_suffix=VOICE_STATE_CREATE,
+        )
+
+        voice_state_delete = EventHolder(
+            plugin_base=self,
+            event_id_suffix=VOICE_STATE_DELETE,
+        )
+
         self.add_event_holders([
             voice_channel_select,
             voice_settings_update,
             get_channel,
+            get_guild,
+            speaking_start,
+            speaking_stop,
+            voice_state_create,
+            voice_state_delete,
         ])
 
 
