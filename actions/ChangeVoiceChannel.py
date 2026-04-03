@@ -6,6 +6,14 @@ from loguru import logger as log
 from PIL import Image, ImageDraw
 
 from .DiscordCore import DiscordCore
+from .avatar_utils import (
+    BUTTON_SIZE,
+    SPEAKING_COLOR,
+    RING_WIDTH,
+    make_circle_avatar,
+    draw_speaking_ring,
+    make_placeholder_avatar,
+)
 from src.backend.PluginManager.EventAssigner import EventAssigner
 from src.backend.PluginManager.InputBases import Input
 
@@ -24,12 +32,14 @@ from ..discordrpc.commands import (
 from GtkHelper.GenerativeUI.ComboRow import ComboRow
 from GtkHelper.GenerativeUI.SwitchRow import SwitchRow
 
-# Button canvas size (Stream Deck key render size)
-_BUTTON_SIZE = 72
+# Button canvas size (Stream Deck key render size) — canonical value lives in
+# avatar_utils; this alias keeps the rest of the file unchanged.
+_BUTTON_SIZE = BUTTON_SIZE
 
-# Speaking indicator ring colour (Discord green)
-_SPEAKING_COLOR = (88, 201, 96, 255)
-_RING_WIDTH = 3
+# Speaking indicator constants re-exported for any code that still imports them
+# from this module.  Actual values live in avatar_utils.
+_SPEAKING_COLOR = SPEAKING_COLOR
+_RING_WIDTH = RING_WIDTH
 
 # User-count badge colours / margin
 _BADGE_BG = (32, 34, 37, 230)
@@ -84,29 +94,14 @@ class Icons(StrEnum):
     VOICE_CHANNEL_INACTIVE = "voice-inactive"
 
 
+# Keep these module-level names so that any code importing them from here
+# (e.g. old code or tests) continues to work without changes.
 def _make_circle_avatar(img: Image.Image, size: int) -> Image.Image:
-    """Resize *img* to *size*×*size* and clip it to a circle."""
-    img = img.convert("RGBA").resize((size, size), Image.LANCZOS)
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
-    result = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    result.paste(img, mask=mask)
-    return result
+    return make_circle_avatar(img, size)
 
 
 def _draw_speaking_ring(img: Image.Image, size: int) -> Image.Image:
-    """Draw a green ring around an avatar image."""
-    overlay = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    half = _RING_WIDTH // 2
-    draw.ellipse(
-        (half, half, size - 1 - half, size - 1 - half),
-        outline=_SPEAKING_COLOR,
-        width=_RING_WIDTH,
-    )
-    result = img.copy()
-    result.paste(overlay, mask=overlay)
-    return result
+    return draw_speaking_ring(img, size)
 
 
 def _compose_avatars(avatars: list[tuple[Image.Image, bool]]) -> Image.Image:
@@ -114,26 +109,26 @@ def _compose_avatars(avatars: list[tuple[Image.Image, bool]]) -> Image.Image:
 
     *avatars* is a list of ``(image, is_speaking)`` tuples.
     """
-    canvas = Image.new("RGBA", (_BUTTON_SIZE, _BUTTON_SIZE), (0, 0, 0, 255))
+    canvas = Image.new("RGBA", (BUTTON_SIZE, BUTTON_SIZE), (0, 0, 0, 255))
     n = min(len(avatars), 4)
     if n == 0:
         return canvas
 
     # Determine grid: 1→full, 2→side-by-side, 3-4→2×2
     if n == 1:
-        size = _BUTTON_SIZE
+        size = BUTTON_SIZE
         positions = [(0, 0)]
     elif n == 2:
-        size = _BUTTON_SIZE // 2
+        size = BUTTON_SIZE // 2
         positions = [(0, size // 2), (size, size // 2)]  # centred vertically
     else:
-        size = _BUTTON_SIZE // 2
+        size = BUTTON_SIZE // 2
         positions = [(0, 0), (size, 0), (0, size), (size, size)]
 
     for i, (img, speaking) in enumerate(avatars[:n]):
-        avatar = _make_circle_avatar(img, size)
+        avatar = make_circle_avatar(img, size)
         if speaking:
-            avatar = _draw_speaking_ring(avatar, size)
+            avatar = draw_speaking_ring(avatar, size)
         x, y = positions[i]
         canvas.paste(avatar, (x, y), avatar)
 
@@ -416,6 +411,8 @@ class ChangeVoiceChannel(DiscordCore):
         user = self._users.get(user_id)
         if not user or user.get("avatar_img") is not None:
             return
+        if not user.get("avatar_hash"):  # No real avatar; placeholder renders immediately
+            return
         if user_id in self._fetching_avatars:
             return
         self._fetching_avatars.add(user_id)
@@ -425,9 +422,15 @@ class ChangeVoiceChannel(DiscordCore):
         user = self._users.get(user_id)
         if not user:
             return
-        image_bytes = None
+        avatar_hash = user.get("avatar_hash")
+        if not avatar_hash:
+            self._fetching_avatars.discard(user_id)
+            return
+        url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
         try:
-            image_bytes = self.backend.fetch_avatar(user_id, user.get("avatar_hash"))
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            user["avatar_img"] = Image.open(io.BytesIO(resp.content)).convert("RGBA")
         except Exception as ex:
             log.error(f"Failed to fetch avatar for {user_id}: {ex}")
         if image_bytes:
@@ -460,12 +463,14 @@ class ChangeVoiceChannel(DiscordCore):
                 self._submit_avatar_fetch(uid)
             show_self = self._show_self_row.get_value()
             current_user_id = self.backend.current_user_id if self.backend else None
-            avatars = [
-                (u["avatar_img"], uid in self._speaking)
-                for uid, u in list(self._users.items())
-                if u.get("avatar_img") is not None
-                and (show_self or uid != current_user_id)
-            ]
+            avatars = []
+            for uid, u in list(self._users.items()):
+                if not show_self and uid == current_user_id:
+                    continue
+                avatar_img = u.get("avatar_img")
+                if avatar_img is None:
+                    avatar_img = make_placeholder_avatar(u.get("username", "?"), uid, BUTTON_SIZE)
+                avatars.append((avatar_img, uid in self._speaking))
             if avatars:
                 self.set_media(image=_compose_avatars(avatars))
             elif self._users:
