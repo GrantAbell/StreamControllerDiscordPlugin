@@ -159,6 +159,13 @@ class Backend(BackendBase):
             return
         self.discord_client.set_voice_settings({"deaf": muted})
 
+    def set_input_volume(self, volume: int):
+        """Set microphone input volume (0-100)."""
+        if not self._ensure_connected():
+            log.warning("Discord client not connected, cannot set input volume")
+            return
+        self.discord_client.set_voice_settings({"input": {"volume": volume}})
+
     def change_voice_channel(self, channel_id: str = None) -> bool:
         if not self._ensure_connected():
             log.warning("Discord client not connected, cannot change voice channel")

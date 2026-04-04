@@ -121,7 +121,6 @@ class ChangeVoiceChannel(DiscordCore):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.has_configuration = True
-        self._current_channel: str = ""
         self.icon_keys = [Icons.VOICE_CHANNEL_ACTIVE, Icons.VOICE_CHANNEL_INACTIVE]
         self.current_icon = self.get_icon(Icons.VOICE_CHANNEL_INACTIVE)
         self.icon_name = Icons.VOICE_CHANNEL_INACTIVE
@@ -318,10 +317,9 @@ class ChangeVoiceChannel(DiscordCore):
 
         connected = self._connected_channel_id == configured_channel
         current_user_id = self.backend.current_user_id
-        show_self = self._show_self_row.get_value()
 
         # Reconcile user list against the authoritative voice_states snapshot.
-        # Self is excluded only in observer mode (not in the channel); show_self
+        # Self is excluded only in observer mode (not in the channel);
         # controls avatar *display* only and is handled in _render_button.
         new_user_ids = set()
         for vs in data.get("voice_states", []):
@@ -408,23 +406,18 @@ class ChangeVoiceChannel(DiscordCore):
     def _fetch_avatar(self, user_id: str):
         user = self._users.get(user_id)
         if not user:
+            self._fetching_avatars.discard(user_id)
             return
         avatar_hash = user.get("avatar_hash")
         if not avatar_hash:
             self._fetching_avatars.discard(user_id)
             return
-        url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
         try:
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            user["avatar_img"] = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+            image_bytes = self.backend.fetch_avatar(user_id, avatar_hash)
+            if image_bytes:
+                user["avatar_img"] = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         except Exception as ex:
             log.error(f"Failed to fetch avatar for {user_id}: {ex}")
-        if image_bytes:
-            try:
-                user["avatar_img"] = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-            except Exception as ex:
-                log.error(f"Failed to decode avatar for {user_id}: {ex}")
         self._fetching_avatars.discard(user_id)
         self._render_button()
 
@@ -545,11 +538,17 @@ class ChangeVoiceChannel(DiscordCore):
 
     def _on_channel_id_changed(self, widget, new_value, old_value):
         """Invalidate all cached state and re-subscribe when the channel ID is changed."""
+        if self._watching_channel_id:
+            try:
+                self.backend.unsubscribe_voice_states(self._watching_channel_id)
+                self.backend.unsubscribe_speaking(self._watching_channel_id)
+            except Exception:
+                pass
         self._guild_channel_id = None
         self._guild_icon_image = None
         self._guild_name = None
         self._guild_id = None
-        self._watching_channel_id = None  # Force _start_watching to re-subscribe
+        self._watching_channel_id = None
         self._users.clear()
         self._speaking.clear()
         self._fetching_avatars.clear()
