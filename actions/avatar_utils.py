@@ -109,25 +109,6 @@ def draw_mute_overlay(img: Image.Image, size: int) -> Image.Image:
     return result
 
 
-# Border drawn around each avatar in the overlapping stack so circles
-# are visually distinct against each other.
-_AVATAR_BORDER_COLOR = (0, 0, 0, 255)
-_AVATAR_BORDER_WIDTH = 2
-
-
-def _avatar_with_border(img: Image.Image, size: int) -> Image.Image:
-    """Add a thin black circular border around a circle-clipped avatar."""
-    result = img.copy()
-    draw = ImageDraw.Draw(result)
-    half = _AVATAR_BORDER_WIDTH // 2
-    draw.ellipse(
-        (half, half, size - 1 - half, size - 1 - half),
-        outline=_AVATAR_BORDER_COLOR,
-        width=_AVATAR_BORDER_WIDTH,
-    )
-    return result
-
-
 def compose_overlapping_avatars(
     avatars: list[tuple[Image.Image, bool, bool]],
     canvas_size: int,
