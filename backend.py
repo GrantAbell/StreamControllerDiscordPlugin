@@ -22,6 +22,7 @@ class Backend(BackendBase):
         self._is_reconnecting: bool = False
         self._voice_channel_users: dict = {}  # {user_id: {username, nick, volume, muted}}
         self._current_user_id: str = None  # Current user's ID (for filtering)
+        self._current_user_avatar: str = None  # Current user's avatar hash
 
     def discord_callback(self, code, event):
         if code == 0:
@@ -67,15 +68,20 @@ class Backend(BackendBase):
                 user = data.get("user", {})
                 self._register_callbacks()
                 self._current_user_id = user.get("id")
+                self._current_user_avatar = user.get("avatar")
                 self._get_current_voice_channel()
             case commands.DISPATCH:
                 evt = event.get("evt")
                 self.frontend.trigger_event(evt, event.get("data"))
             case commands.GET_SELECTED_VOICE_CHANNEL:
-                self._current_voice_channel = (
-                    event.get("data").get("channel_id") if event.get("data") else None
+                data = event.get("data")
+                channel_id = data.get("id") if data else None
+                self._current_voice_channel = channel_id
+                # Normalize to match VOICE_CHANNEL_SELECT dispatch format
+                self.frontend.trigger_event(
+                    commands.VOICE_CHANNEL_SELECT,
+                    {"channel_id": channel_id},
                 )
-                self.frontend.trigger_event(commands.VOICE_CHANNEL_SELECT, event.get("data"))
             case commands.GET_CHANNEL:
                 self.frontend.trigger_event(commands.GET_CHANNEL, event.get("data"))
             case commands.GET_GUILD:
@@ -182,6 +188,10 @@ class Backend(BackendBase):
     @property
     def current_user_id(self):
         return self._current_user_id
+
+    @property
+    def current_user_avatar(self):
+        return self._current_user_avatar
 
     def _get_current_voice_channel(self):
         if not self._ensure_connected():

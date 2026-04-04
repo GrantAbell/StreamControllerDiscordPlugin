@@ -13,6 +13,7 @@ from .avatar_utils import (
     make_circle_avatar,
     draw_speaking_ring,
     make_placeholder_avatar,
+    compose_overlapping_avatars,
 )
 from src.backend.PluginManager.EventAssigner import EventAssigner
 from src.backend.PluginManager.InputBases import Input
@@ -105,34 +106,15 @@ def _draw_speaking_ring(img: Image.Image, size: int) -> Image.Image:
 
 
 def _compose_avatars(avatars: list[tuple[Image.Image, bool]]) -> Image.Image:
-    """Compose up to 4 avatar images (with optional speaking ring) onto a button canvas.
-
-    *avatars* is a list of ``(image, is_speaking)`` tuples.
-    """
-    canvas = Image.new("RGBA", (BUTTON_SIZE, BUTTON_SIZE), (0, 0, 0, 255))
-    n = min(len(avatars), 4)
-    if n == 0:
-        return canvas
-
-    # Determine grid: 1→full, 2→side-by-side, 3-4→2×2
-    if n == 1:
-        size = BUTTON_SIZE
-        positions = [(0, 0)]
-    elif n == 2:
-        size = BUTTON_SIZE // 2
-        positions = [(0, size // 2), (size, size // 2)]  # centred vertically
-    else:
-        size = BUTTON_SIZE // 2
-        positions = [(0, 0), (size, 0), (0, size), (size, size)]
-
-    for i, (img, speaking) in enumerate(avatars[:n]):
-        avatar = make_circle_avatar(img, size)
+    """Compose avatar images in an overlapping stack, speaking user in front."""
+    # Find the last speaking user to bring to front
+    front = -1
+    avatars_3 = []
+    for i, (img, speaking) in enumerate(avatars):
         if speaking:
-            avatar = draw_speaking_ring(avatar, size)
-        x, y = positions[i]
-        canvas.paste(avatar, (x, y), avatar)
-
-    return canvas
+            front = i
+        avatars_3.append((img, speaking, False))
+    return compose_overlapping_avatars(avatars_3, BUTTON_SIZE, front_index=front)
 
 
 class ChangeVoiceChannel(DiscordCore):
@@ -189,6 +171,11 @@ class ChangeVoiceChannel(DiscordCore):
         )
         # Subscribe to the configured channel and fetch initial state
         self._start_watching_configured_channel()
+
+        # Request current voice channel so _connected_channel_id is set if
+        # we're already in a channel when StreamController starts.
+        if self.backend:
+            self.backend.request_current_voice_channel()
 
 
     def _start_watching_configured_channel(self):

@@ -23,7 +23,7 @@ class PluginSettings:
         self._settings_cache = None
 
     def get_settings_area(self) -> Adw.PreferencesGroup:
-        if not self._plugin_base.backend.is_authed():
+        if not self._plugin_base.backend or not self._plugin_base.backend.is_authed():
             self._status_label = Gtk.Label(
                 label=self._plugin_base.lm.get("actions.base.credentials.failed"),
                 css_classes=["discord-controller-red"],

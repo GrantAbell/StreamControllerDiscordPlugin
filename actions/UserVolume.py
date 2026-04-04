@@ -9,7 +9,9 @@ from .avatar_utils import (
     BUTTON_SIZE,
     make_circle_avatar,
     draw_speaking_ring,
+    draw_mute_overlay,
     make_placeholder_avatar,
+    compose_overlapping_avatars,
 )
 from src.backend.PluginManager.EventAssigner import EventAssigner
 from src.backend.PluginManager.InputBases import Input
@@ -83,6 +85,18 @@ class UserVolume(DiscordCore):
                 callback=self._on_get_channel,
                 )
         self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_CREATE}",
+                callback=self._on_voice_state_create,
+                )
+        self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_DELETE}",
+                callback=self._on_voice_state_delete,
+                )
+        self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_UPDATE}",
+                callback=self._on_voice_state_update,
+                )
+        self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{SPEAKING_START}",
                 callback=self._on_speaking_start,
                 )
@@ -95,7 +109,8 @@ class UserVolume(DiscordCore):
         self._update_display()
 
         # Request current voice channel state (in case we're already in a channel)
-        self.backend.request_current_voice_channel()
+        if self.backend:
+            self.backend.request_current_voice_channel()
 
     def create_event_assigners(self):
         # Dial rotation: adjust volume
@@ -136,6 +151,16 @@ class UserVolume(DiscordCore):
             )
         )
 
+        # Touchscreen tap: toggle mute on current user
+        self.event_manager.add_event_assigner(
+            EventAssigner(
+                id="toggle-mute",
+                ui_label="toggle-mute",
+                default_event=Input.Dial.Events.SHORT_TOUCH_PRESS,
+                callback=self._on_toggle_mute,
+            )
+        )
+
     # === Event Handlers ===
 
     def _on_volume_up(self, _):
@@ -152,6 +177,24 @@ class UserVolume(DiscordCore):
             return
         self._current_user_index = (self._current_user_index + 1) % len(self._users)
         self._update_display()
+
+    def _on_toggle_mute(self, _):
+        """Toggle mute on the currently displayed user."""
+        if not self._users or self._current_user_index >= len(self._users):
+            return
+        user = self._users[self._current_user_index]
+        new_muted = not user.get("muted", False)
+        try:
+            if user.get("is_self"):
+                self.backend.set_mute(new_muted)
+            else:
+                if not self.backend.set_user_mute(user["id"], new_muted):
+                    return
+            user["muted"] = new_muted
+            self._update_display()
+        except Exception as ex:
+            log.error(f"Failed to toggle mute for {user['id']}: {ex}")
+            self.show_error(3)
 
     def _adjust_volume(self, delta: int):
         """Adjust current user's volume by delta."""
@@ -221,11 +264,6 @@ class UserVolume(DiscordCore):
                 self._current_channel_id = new_channel_id
                 self._current_channel_name = data.get("name", "Voice")
 
-                # Register frontend callbacks for voice state events
-                self.plugin_base.add_callback(VOICE_STATE_CREATE, self._on_voice_state_create)
-                self.plugin_base.add_callback(VOICE_STATE_DELETE, self._on_voice_state_delete)
-                self.plugin_base.add_callback(VOICE_STATE_UPDATE, self._on_voice_state_update)
-
                 # Subscribe to voice state and speaking events via backend (with channel_id)
                 self.backend.subscribe_voice_states(self._current_channel_id)
                 self.backend.subscribe_speaking(self._current_channel_id)
@@ -272,7 +310,7 @@ class UserVolume(DiscordCore):
                         "nick": vs.get("nick"),
                         "volume": self._self_input_volume,
                         "muted": False,
-                        "avatar_hash": user_data.get("avatar"),
+                        "avatar_hash": user_data.get("avatar") or self.backend.current_user_avatar,
                         "avatar_img": None,
                         "is_self": True,
                     }
@@ -306,8 +344,9 @@ class UserVolume(DiscordCore):
 
         self._update_display()
 
-    def _on_voice_state_create(self, data: dict):
+    def _on_voice_state_create(self, *args, **kwargs):
         """Handle user joining voice channel."""
+        data = args[1] if len(args) > 1 else None
         if not data:
             return
 
@@ -346,8 +385,9 @@ class UserVolume(DiscordCore):
 
         self._update_display()
 
-    def _on_voice_state_delete(self, data: dict):
+    def _on_voice_state_delete(self, *args, **kwargs):
         """Handle user leaving voice channel."""
+        data = args[1] if len(args) > 1 else None
         if not data:
             return
 
@@ -370,8 +410,9 @@ class UserVolume(DiscordCore):
 
         self._update_display()
 
-    def _on_voice_state_update(self, data: dict):
+    def _on_voice_state_update(self, *args, **kwargs):
         """Handle user voice state change (volume, mute, etc)."""
+        data = args[1] if len(args) > 1 else None
         if not data:
             return
 
@@ -385,7 +426,7 @@ class UserVolume(DiscordCore):
             if user["id"] == user_id:
                 if "volume" in data:
                     user["volume"] = data.get("volume")
-                if "mute" in data:
+                if "mute" in data and not user.get("is_self"):
                     user["muted"] = data.get("mute")
                 if "nick" in data:
                     user["nick"] = data.get("nick")
@@ -470,19 +511,21 @@ class UserVolume(DiscordCore):
             user = self._users[self._current_user_index]
             display_name = user.get("nick") or user.get("username", "Unknown")
             volume = user.get("volume", 100)
-            is_speaking = user["id"] in self._speaking
 
-            # Build avatar image
-            avatar_src = user.get("avatar_img")
-            if avatar_src is not None:
-                avatar = make_circle_avatar(avatar_src, BUTTON_SIZE)
-            else:
-                avatar = make_placeholder_avatar(display_name, user["id"], BUTTON_SIZE)
-                # Kick off a fetch if not already in-flight
-                self._submit_avatar_fetch(user["id"])
-            if is_speaking:
-                avatar = draw_speaking_ring(avatar, BUTTON_SIZE)
-            self.set_media(image=avatar)
+            # Build overlapping avatar stack with selected user in front
+            avatar_list = []
+            for u in self._users:
+                src = u.get("avatar_img")
+                name = u.get("nick") or u.get("username", "?")
+                if src is not None:
+                    img = src
+                else:
+                    img = make_placeholder_avatar(name, u["id"], BUTTON_SIZE)
+                    self._submit_avatar_fetch(u["id"])
+                avatar_list.append((img, u["id"] in self._speaking, u.get("muted", False)))
+            self.set_media(image=compose_overlapping_avatars(
+                avatar_list, BUTTON_SIZE, front_index=self._current_user_index,
+            ))
 
             # Truncate name for label overlay
             display_name = display_name[:10] if len(display_name) > 10 else display_name

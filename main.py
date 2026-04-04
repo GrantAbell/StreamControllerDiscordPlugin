@@ -27,7 +27,7 @@ from .discordrpc.commands import (
     VOICE_CHANNEL_SELECT, VOICE_SETTINGS_UPDATE,
     GET_CHANNEL, GET_GUILD,
     SPEAKING_START, SPEAKING_STOP,
-    VOICE_STATE_CREATE, VOICE_STATE_DELETE,
+    VOICE_STATE_CREATE, VOICE_STATE_DELETE, VOICE_STATE_UPDATE,
 )
 
 
@@ -121,6 +121,11 @@ class PluginTemplate(PluginBase):
             event_id_suffix=VOICE_STATE_DELETE,
         )
 
+        voice_state_update = EventHolder(
+            plugin_base=self,
+            event_id_suffix=VOICE_STATE_UPDATE,
+        )
+
         self.add_event_holders([
             voice_channel_select,
             voice_settings_update,
@@ -130,6 +135,7 @@ class PluginTemplate(PluginBase):
             speaking_stop,
             voice_state_create,
             voice_state_delete,
+            voice_state_update,
         ])
 
 
@@ -224,7 +230,9 @@ class PluginTemplate(PluginBase):
         self.add_action_holder(user_volume)
 
     def setup_backend(self):
-        if self.backend and self.backend.is_authed():
+        if not self.backend:
+            return
+        if self.backend.is_authed():
             return
         settings = self.get_settings()
         client_id = settings.get("client_id", "")
