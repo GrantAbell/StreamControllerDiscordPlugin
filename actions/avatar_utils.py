@@ -108,16 +108,15 @@ def draw_mute_overlay(img: Image.Image, size: int) -> Image.Image:
     result.paste(overlay, mask=overlay)
     return result
 
-
 def compose_overlapping_avatars(
     avatars: list[tuple[Image.Image, bool, bool]],
     canvas_size: int,
-    front_index: int = -1,
+    front_index: int | None = None,
 ) -> Image.Image:
     """Compose avatars in an overlapping stack, with *front_index* on top.
 
     *avatars* is a list of ``(image, is_speaking, is_muted)`` tuples.
-    *front_index* is the index of the avatar to place in front.  When -1
+    *front_index* is the index of the avatar to place in front.  When ``None``
     (the default), no reordering is done and the last avatar is on top.
     """
     canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 255))
@@ -142,7 +141,7 @@ def compose_overlapping_avatars(
     # Build a display order where the front avatar is placed at the centre
     # position and the remaining avatars fill the other slots, preserving
     # their relative order.  The front avatar is painted last (on top).
-    if 0 <= front_index < n:
+    if front_index is not None and 0 <= front_index < n:
         others = [i for i in range(n) if i != front_index]
         centre = n // 2
         display_order = others[:centre] + [front_index] + others[centre:]
@@ -160,10 +159,9 @@ def compose_overlapping_avatars(
         positions[orig_idx] = x_start + slot * (avatar_size // 2)
 
     # Paint order: everything except front first, then front on top.
-    paint_order = [i for i in display_order if i != front_index] + (
-        [front_index] if 0 <= front_index < n else []
-    )
-    if not paint_order:
+    if front_index is not None and 0 <= front_index < n:
+        paint_order = [i for i in display_order if i != front_index] + [front_index]
+    else:
         paint_order = display_order
 
     for idx in paint_order:

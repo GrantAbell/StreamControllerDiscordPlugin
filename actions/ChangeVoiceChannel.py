@@ -1,17 +1,12 @@
 import io
-import math
 from enum import StrEnum
 
 from loguru import logger as log
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from .DiscordCore import DiscordCore
 from .avatar_utils import (
     BUTTON_SIZE,
-    SPEAKING_COLOR,
-    RING_WIDTH,
-    make_circle_avatar,
-    draw_speaking_ring,
     make_placeholder_avatar,
     compose_overlapping_avatars,
 )
@@ -19,6 +14,8 @@ from src.backend.PluginManager.EventAssigner import EventAssigner
 from src.backend.PluginManager.InputBases import Input
 
 from GtkHelper.GenerativeUI.EntryRow import EntryRow
+from GtkHelper.GenerativeUI.ComboRow import ComboRow
+from GtkHelper.GenerativeUI.SwitchRow import SwitchRow
 
 from ..discordrpc.commands import (
     VOICE_CHANNEL_SELECT,
@@ -30,29 +27,15 @@ from ..discordrpc.commands import (
     SPEAKING_STOP,
 )
 
-from GtkHelper.GenerativeUI.ComboRow import ComboRow
-from GtkHelper.GenerativeUI.SwitchRow import SwitchRow
-
-# Button canvas size (Stream Deck key render size) — canonical value lives in
-# avatar_utils; this alias keeps the rest of the file unchanged.
-_BUTTON_SIZE = BUTTON_SIZE
-
-# Speaking indicator constants re-exported for any code that still imports them
-# from this module.  Actual values live in avatar_utils.
-_SPEAKING_COLOR = SPEAKING_COLOR
-_RING_WIDTH = RING_WIDTH
-
 # User-count badge colours / margin
 _BADGE_BG = (32, 34, 37, 230)
 _BADGE_FG = (255, 255, 255, 255)
 _BADGE_MARGIN = 4
 
 try:
-    from PIL import ImageFont as _ImageFont
-    _badge_font = _ImageFont.load_default(size=10)
+    _badge_font = ImageFont.load_default(size=10)
 except Exception:
-    from PIL import ImageFont as _ImageFont
-    _badge_font = _ImageFont.load_default()
+    _badge_font = ImageFont.load_default()
 
 
 def _draw_counter_badge(base: Image.Image, count: int, corner: str = "bottom-right") -> Image.Image:
@@ -60,7 +43,7 @@ def _draw_counter_badge(base: Image.Image, count: int, corner: str = "bottom-rig
 
     *corner* is one of: "top-left", "top-right", "bottom-left", "bottom-right".
     """
-    img = base.convert("RGBA").resize((_BUTTON_SIZE, _BUTTON_SIZE), Image.LANCZOS)
+    img = base.convert("RGBA").resize((BUTTON_SIZE, BUTTON_SIZE), Image.LANCZOS)
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     text = str(count)
@@ -72,13 +55,13 @@ def _draw_counter_badge(base: Image.Image, count: int, corner: str = "bottom-rig
     right = corner.endswith("right")
     bottom = corner.startswith("bottom")
     if right:
-        x2 = _BUTTON_SIZE - _BADGE_MARGIN
+        x2 = BUTTON_SIZE - _BADGE_MARGIN
         x1 = x2 - bw
     else:
         x1 = _BADGE_MARGIN
         x2 = x1 + bw
     if bottom:
-        y2 = _BUTTON_SIZE - _BADGE_MARGIN
+        y2 = BUTTON_SIZE - _BADGE_MARGIN
         y1 = y2 - bh
     else:
         y1 = _BADGE_MARGIN
@@ -95,26 +78,15 @@ class Icons(StrEnum):
     VOICE_CHANNEL_INACTIVE = "voice-inactive"
 
 
-# Keep these module-level names so that any code importing them from here
-# (e.g. old code or tests) continues to work without changes.
-def _make_circle_avatar(img: Image.Image, size: int) -> Image.Image:
-    return make_circle_avatar(img, size)
-
-
-def _draw_speaking_ring(img: Image.Image, size: int) -> Image.Image:
-    return draw_speaking_ring(img, size)
-
-
 def _compose_avatars(avatars: list[tuple[Image.Image, bool]]) -> Image.Image:
     """Compose avatar images in an overlapping stack, speaking user in front."""
-    # Find the last speaking user to bring to front
-    front = -1
-    avatars_3 = []
+    front = None
+    extended = []
     for i, (img, speaking) in enumerate(avatars):
         if speaking:
             front = i
-        avatars_3.append((img, speaking, False))
-    return compose_overlapping_avatars(avatars_3, BUTTON_SIZE, front_index=front)
+        extended.append((img, speaking, False))
+    return compose_overlapping_avatars(extended, BUTTON_SIZE, front_index=front)
 
 
 class ChangeVoiceChannel(DiscordCore):
