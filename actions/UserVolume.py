@@ -67,10 +67,26 @@ class UserVolume(DiscordCore):
             subtitle="Include yourself so the dial adjusts your microphone input volume",
             auto_add=False,
             complex_var_name=True,
+            on_change=self._on_control_self_changed,
         )
 
     def get_config_rows(self):
         return [self._control_self_row._widget]
+
+    def _on_control_self_changed(self, widget, new_value, old_value):
+        """Add or remove self from the user list when the toggle changes."""
+        if not new_value:
+            # Remove any is_self entry
+            had_self = any(u.get("is_self") for u in self._users)
+            self._users = [u for u in self._users if not u.get("is_self")]
+            if had_self:
+                if self._current_user_index >= len(self._users):
+                    self._current_user_index = max(0, len(self._users) - 1)
+                self._update_display()
+        else:
+            # Re-fetch channel data to inject self
+            if self._in_voice_channel and self._current_channel_id and self.backend:
+                self.backend.get_channel(self._current_channel_id)
 
     def on_ready(self):
         super().on_ready()
@@ -292,6 +308,13 @@ class UserVolume(DiscordCore):
         # Process voice_states array
         voice_states = data.get("voice_states", [])
         current_user_id = self.backend.current_user_id
+        control_self = self._control_self_row.get_value()
+
+        # Remove stale is_self entry if the toggle was turned off
+        if not control_self:
+            self._users = [u for u in self._users if not u.get("is_self")]
+            if self._current_user_index >= len(self._users):
+                self._current_user_index = max(0, len(self._users) - 1)
 
         for vs in voice_states:
             user_data = vs.get("user", {})
@@ -302,7 +325,7 @@ class UserVolume(DiscordCore):
 
             # Self: inject as first entry when the toggle is enabled
             if user_id == current_user_id:
-                if self._control_self_row.get_value() and not any(u.get("is_self") for u in self._users):
+                if control_self and not any(u.get("is_self") for u in self._users):
                     self_info = {
                         "id": user_id,
                         "username": user_data.get("username", "Me"),
