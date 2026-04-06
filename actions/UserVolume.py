@@ -1,6 +1,5 @@
 import io
 
-import requests
 from loguru import logger as log
 from PIL import Image
 
@@ -481,11 +480,16 @@ class UserVolume(DiscordCore):
         if not avatar_hash:
             self._fetching_avatars.discard(user_id)
             return
-        url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
         try:
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            user["avatar_img"] = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+            backend = getattr(self, "backend", None)
+            if backend is None and hasattr(self, "plugin_base"):
+                backend = getattr(self.plugin_base, "backend", None)
+            if backend is None or not hasattr(backend, "fetch_avatar"):
+                raise AttributeError("Backend fetch_avatar helper is not available")
+
+            avatar_bytes = backend.fetch_avatar(user_id, avatar_hash)
+            if avatar_bytes:
+                user["avatar_img"] = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
         except Exception as ex:
             log.error(f"Failed to fetch avatar for {user_id}: {ex}")
         self._fetching_avatars.discard(user_id)
