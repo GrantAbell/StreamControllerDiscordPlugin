@@ -346,7 +346,11 @@ class ChangeVoiceChannel(DiscordCore):
         self._guild_name = data.get("name", "")
         icon_url = data.get("icon_url")
         if icon_url:
-            self.plugin_base._thread_pool.submit(self._fetch_guild_icon, icon_url)
+            try:
+                self.plugin_base._thread_pool.submit(self._fetch_guild_icon, icon_url)
+            except Exception as ex:
+                log.error(f"Failed to submit guild icon fetch task: {ex}")
+                self._fetch_guild_icon(icon_url)
         else:
             self._guild_icon_image = None
             self._render_button()
