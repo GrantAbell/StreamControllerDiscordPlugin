@@ -54,6 +54,9 @@ class UserVolume(DiscordCore):
         self._speaking: set = set()          # user_ids currently speaking
         self._fetching_avatars: set = set()  # user_ids with in-flight avatar fetches
         self._self_input_volume: int = 100   # Tracked locally; mic input volume is write-only via RPC
+        self._label_cache: dict[str, str] = {"top": None, "center": None, "bottom": None}
+        self._events_connected: bool = False
+        self._requested_initial_voice_state: bool = False
 
         # Volume adjustment step (percentage points per dial tick)
         self.VOLUME_STEP = 5
@@ -91,41 +94,44 @@ class UserVolume(DiscordCore):
     def on_ready(self):
         super().on_ready()
 
-        self.plugin_base.connect_to_event(
+        if not self._events_connected:
+            self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_CHANNEL_SELECT}",
                 callback=self._on_voice_channel_select,
                 )
-        self.plugin_base.connect_to_event(
+            self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{GET_CHANNEL}",
                 callback=self._on_get_channel,
                 )
-        self.plugin_base.connect_to_event(
+            self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_CREATE}",
                 callback=self._on_voice_state_create,
                 )
-        self.plugin_base.connect_to_event(
+            self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_DELETE}",
                 callback=self._on_voice_state_delete,
                 )
-        self.plugin_base.connect_to_event(
+            self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_UPDATE}",
                 callback=self._on_voice_state_update,
                 )
-        self.plugin_base.connect_to_event(
+            self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{SPEAKING_START}",
                 callback=self._on_speaking_start,
                 )
-        self.plugin_base.connect_to_event(
+            self.plugin_base.connect_to_event(
                 event_id=f"{self.plugin_base.get_plugin_id()}::{SPEAKING_STOP}",
                 callback=self._on_speaking_stop,
                 )
+            self._events_connected = True
 
         # Initialize display
         self._update_display()
 
         # Request current voice channel state (in case we're already in a channel)
-        if self.backend:
+        if self.backend and not self._requested_initial_voice_state:
             self.backend.request_current_voice_channel()
+            self._requested_initial_voice_state = True
 
     def create_event_assigners(self):
         # Dial rotation: adjust volume
@@ -446,7 +452,9 @@ class UserVolume(DiscordCore):
         # Find and update user
         for user in self._users:
             if user["id"] == user_id:
-                if "volume" in data:
+                # Voice-state volume tracks per-user output volume, not local mic input.
+                # Preserve self input volume managed through set_input_volume.
+                if "volume" in data and not user.get("is_self"):
                     user["volume"] = data.get("volume")
                 if "mute" in data and not user.get("is_self"):
                     user["muted"] = data.get("mute")
@@ -520,19 +528,29 @@ class UserVolume(DiscordCore):
 
     # === Display ===
 
+    def _set_label_if_changed(self, text: str, position: str):
+        """Only update labels when content changes to avoid noisy state lookup logs."""
+        if self._label_cache.get(position) == text:
+            return
+        self._label_cache[position] = text
+        self.set_label(text, position=position)
+
     def _update_display(self):
         """Update the dial display with current user info."""
         if not self._in_voice_channel or not self._users:
-            self.set_top_label("Not in voice" if not self._in_voice_channel else self._current_channel_name[:12])
-            self.set_center_label("")
-            self.set_bottom_label("No users" if self._in_voice_channel else "")
+            self._set_label_if_changed(
+                "Not in voice" if not self._in_voice_channel else self._current_channel_name[:12],
+                position="top",
+            )
+            self._set_label_if_changed("", position="center")
+            self._set_label_if_changed("No users" if self._in_voice_channel else "", position="bottom")
             # Clear any lingering avatar image so the display resets cleanly
             self.set_media(image=Image.new("RGBA", (BUTTON_SIZE, BUTTON_SIZE), (0, 0, 0, 255)))
             return
 
         # Truncate channel name for space
         channel_display = self._current_channel_name[:12] if len(self._current_channel_name) > 12 else self._current_channel_name
-        self.set_top_label(channel_display)
+        self._set_label_if_changed(channel_display, position="top")
 
         if self._current_user_index < len(self._users):
             user = self._users[self._current_user_index]
@@ -556,8 +574,8 @@ class UserVolume(DiscordCore):
 
             # Truncate name for label overlay
             display_name = display_name[:10] if len(display_name) > 10 else display_name
-            self.set_center_label(display_name)
-            self.set_bottom_label(f"{volume}%")
+            self._set_label_if_changed(display_name, position="center")
+            self._set_label_if_changed(f"{volume}%", position="bottom")
         else:
-            self.set_center_label("")
-            self.set_bottom_label("No selection")
+            self._set_label_if_changed("", position="center")
+            self._set_label_if_changed("No selection", position="bottom")

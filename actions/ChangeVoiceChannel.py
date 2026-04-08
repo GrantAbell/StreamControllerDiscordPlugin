@@ -16,6 +16,7 @@ from src.backend.PluginManager.InputBases import Input
 from GtkHelper.GenerativeUI.EntryRow import EntryRow
 from GtkHelper.GenerativeUI.ComboRow import ComboRow
 from GtkHelper.GenerativeUI.SwitchRow import SwitchRow
+from GtkHelper.GenerativeUI.SpinRow import SpinRow
 
 from ..discordrpc.commands import (
     VOICE_CHANNEL_SELECT,
@@ -102,6 +103,7 @@ class ChangeVoiceChannel(DiscordCore):
         self._guild_name: str = None
         self._guild_icon_image: Image.Image = None
         self._guild_channel_id: str = None
+        self._channel_name: str = None  # Current channel name for label display
 
         # Voice channel / avatar state
         self._connected_channel_id: str = None  # channel we're currently in
@@ -316,6 +318,9 @@ class ChangeVoiceChannel(DiscordCore):
                 self._users.pop(uid)
                 self._speaking.discard(uid)
 
+        # Store channel name for label display
+        self._channel_name = data.get("name", "")
+
         # Guild info lookup (only if not yet cached for this channel)
         if self._guild_channel_id != channel_id:
             guild_id = data.get("guild_id")
@@ -404,10 +409,17 @@ class ChangeVoiceChannel(DiscordCore):
             and self._connected_channel_id == configured
         )
 
-        # Only clear the label position this button manages — leave other positions
-        # untouched so users' own labels in those spots are not erased.
-        position = self._label_position_row.get_value() or "bottom"
-        self.set_label("", position=position)
+        # Build label texts based on settings
+        guild_position = self._label_position_row.get_value() or "bottom"
+        channel_position = self._channel_name_label_position_row.get_value() or "none"
+        guild_text = self._guild_name or ""
+        channel_text = self._channel_name or ""
+
+        # Clear both potential label positions if configured
+        if guild_position != "none":
+            self.set_label("", position=guild_position)
+        if channel_position != "none":
+            self.set_label("", position=channel_position)
 
         if connected:
             # Trigger fetches for any users who joined before avatars were loaded
@@ -459,15 +471,30 @@ class ChangeVoiceChannel(DiscordCore):
             elif self._guild_icon_image is not None:
                 self.set_media(image=self._guild_icon_image)
             else:
-                # Empty channel, no guild icon — voice icon + optional name label
+                # Empty channel, no guild icon — show inactive voice icon.
                 super().display_icon()
-                label_text = self._guild_name or ""
-                if label_text:
-                    self.set_label(
-                        label_text, position=position,
-                        font_size=8, outline_width=2,
-                        outline_color=[0, 0, 0, 255],
-                    )
+
+        # Render guild name label
+        if guild_text and guild_position != "none":
+            guild_font_size = int(self._guild_label_font_size_row.get_value())
+            self.set_label(
+                guild_text,
+                position=guild_position,
+                font_size=guild_font_size,
+                outline_width=2,
+                outline_color=[0, 0, 0, 255],
+            )
+
+        # Render channel name label
+        if channel_text and channel_position != "none":
+            channel_font_size = int(self._channel_label_font_size_row.get_value())
+            self.set_label(
+                channel_text,
+                position=channel_position,
+                font_size=channel_font_size,
+                outline_width=2,
+                outline_color=[0, 0, 0, 255],
+            )
 
 
     def create_generative_ui(self):
@@ -484,10 +511,47 @@ class ChangeVoiceChannel(DiscordCore):
             action_core=self,
             var_name="change_voice_channel.label_position",
             default_value="bottom",
-            items=["top", "center", "bottom"],
+            items=["top", "center", "bottom", "none"],
             title="Server name label position",
             auto_add=False,
             complex_var_name=True,
+            on_change=lambda *_: self._render_button(),
+        )
+        self._guild_label_font_size_row = SpinRow(
+            action_core=self,
+            var_name="change_voice_channel.guild_label_font_size",
+            default_value=8,
+            min=6,
+            max=32,
+            step=1,
+            digits=0,
+            title="Server name font size",
+            auto_add=False,
+            complex_var_name=True,
+            on_change=lambda *_: self._render_button(),
+        )
+        self._channel_name_label_position_row = ComboRow(
+            action_core=self,
+            var_name="change_voice_channel.channel_label_position",
+            default_value="none",
+            items=["none", "top", "center", "bottom"],
+            title="Channel name label position",
+            auto_add=False,
+            complex_var_name=True,
+            on_change=lambda *_: self._render_button(),
+        )
+        self._channel_label_font_size_row = SpinRow(
+            action_core=self,
+            var_name="change_voice_channel.channel_label_font_size",
+            default_value=8,
+            min=6,
+            max=32,
+            step=1,
+            digits=0,
+            title="Channel name font size",
+            auto_add=False,
+            complex_var_name=True,
+            on_change=lambda *_: self._render_button(),
         )
         self._show_self_row = SwitchRow(
             action_core=self,
@@ -497,6 +561,7 @@ class ChangeVoiceChannel(DiscordCore):
             subtitle="Include yourself in the user grid when connected",
             auto_add=False,
             complex_var_name=True,
+            on_change=lambda *_: self._render_button(),
         )
         self._badge_corner_row = ComboRow(
             action_core=self,
@@ -506,6 +571,7 @@ class ChangeVoiceChannel(DiscordCore):
             title="User count badge corner",
             auto_add=False,
             complex_var_name=True,
+            on_change=lambda *_: self._render_button(),
         )
 
     def _on_channel_id_changed(self, widget, new_value, old_value):
@@ -520,6 +586,7 @@ class ChangeVoiceChannel(DiscordCore):
         self._guild_icon_image = None
         self._guild_name = None
         self._guild_id = None
+        self._channel_name = None
         self._watching_channel_id = None
         self._users.clear()
         self._speaking.clear()
@@ -531,6 +598,9 @@ class ChangeVoiceChannel(DiscordCore):
         return [
             self._channel_row._widget,
             self._label_position_row._widget,
+            self._guild_label_font_size_row._widget,
+            self._channel_name_label_position_row._widget,
+            self._channel_label_font_size_row._widget,
             self._show_self_row._widget,
             self._badge_corner_row._widget,
         ]

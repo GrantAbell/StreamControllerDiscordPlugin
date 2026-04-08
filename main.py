@@ -1,5 +1,6 @@
 import os
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from loguru import logger as log
@@ -45,7 +46,9 @@ class PluginTemplate(PluginBase):
         self._settings_manager = PluginSettings(self)
         self.has_plugin_settings = True
         self._thread_pool = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="discord-"
+            max_workers=4,
+            thread_name_prefix="discord-",
+            initializer=lambda: setattr(threading.current_thread(), "daemon", True),
         )
         self._add_icons()
         self._register_actions()
