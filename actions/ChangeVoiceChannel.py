@@ -407,6 +407,10 @@ class ChangeVoiceChannel(DiscordCore):
         self._render_button()
 
     def _render_button(self):
+        # Ensure configured-channel metadata and subscriptions are loaded even if
+        # initial auth/state events were missed during startup ordering.
+        self._start_watching_configured_channel()
+
         configured = self._channel_row.get_value()
         connected = (
             self._connected_channel_id is not None
@@ -620,14 +624,19 @@ class ChangeVoiceChannel(DiscordCore):
         )
 
     def _on_change_channel(self, _):
-        if self._connected_channel_id is not None:
+        configured = self._channel_row.get_value()
+
+        # Toggle behavior only when already connected to this configured channel.
+        # If connected to another channel, switch to the configured one instead.
+        if self._connected_channel_id is not None and self._connected_channel_id == configured:
             try:
                 self.backend.change_voice_channel(None)
             except Exception as ex:
                 log.error(ex)
                 self.show_error(3)
             return
-        channel = self._channel_row.get_value()
+
+        channel = configured
         try:
             self.backend.change_voice_channel(channel)
         except Exception as ex:
