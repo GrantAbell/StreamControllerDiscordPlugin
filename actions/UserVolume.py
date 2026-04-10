@@ -54,7 +54,7 @@ class UserVolume(DiscordCore):
         self._speaking: set = set()          # user_ids currently speaking
         self._fetching_avatars: set = set()  # user_ids with in-flight avatar fetches
         self._self_input_volume: int = 100   # Tracked locally; mic input volume is write-only via RPC
-        self._label_cache: dict[str, str] = {"top": None, "center": None, "bottom": None}
+        self._label_cache: dict[str, str] = {"top": "", "center": "", "bottom": ""}
         self._events_connected: bool = False
         self._requested_initial_voice_state: bool = False
 
@@ -529,9 +529,7 @@ class UserVolume(DiscordCore):
     # === Display ===
 
     def _set_label_if_changed(self, text: str, position: str):
-        """Only update labels when content changes to avoid noisy state lookup logs."""
-        if self._label_cache.get(position) == text:
-            return
+        """Set labels on every refresh so external UI clears are immediately healed."""
         self._label_cache[position] = text
         self.set_label(text, position=position)
 
