@@ -17,6 +17,7 @@ from GtkHelper.GenerativeUI.EntryRow import EntryRow
 from GtkHelper.GenerativeUI.ComboRow import ComboRow
 from GtkHelper.GenerativeUI.SwitchRow import SwitchRow
 from GtkHelper.GenerativeUI.SpinRow import SpinRow
+from gi.repository import GLib  # type: ignore[attr-defined]
 
 from ..discordrpc.commands import (
     VOICE_CHANNEL_SELECT,
@@ -111,44 +112,79 @@ class ChangeVoiceChannel(DiscordCore):
         self._users: dict = {}  # user_id → {username, avatar_hash, avatar_img}
         self._speaking: set = set()  # user_ids currently speaking
         self._fetching_avatars: set = set()  # user_ids with in-flight avatar fetches
+        self._events_connected: bool = False
+        self._requested_initial_voice_state: bool = False
+        self._startup_sync_source_id: int | None = None
+        self._startup_sync_attempts: int = 0
+        self._last_guild_label_position: str = "none"
+        self._last_channel_label_position: str = "none"
+        self._label_cache: dict[str, tuple[str, int]] = {
+            "guild": ("", 0),
+            "channel": ("", 0),
+        }
 
     def on_ready(self):
         super().on_ready()
-        self.plugin_base.connect_to_event(
-            event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_CHANNEL_SELECT}",
-            callback=self._on_voice_channel_select,
-        )
-        self.plugin_base.connect_to_event(
-            event_id=f"{self.plugin_base.get_plugin_id()}::{GET_CHANNEL}",
-            callback=self._on_get_channel,
-        )
-        self.plugin_base.connect_to_event(
-            event_id=f"{self.plugin_base.get_plugin_id()}::{GET_GUILD}",
-            callback=self._on_get_guild,
-        )
-        self.plugin_base.connect_to_event(
-            event_id=f"{self.plugin_base.get_plugin_id()}::{SPEAKING_START}",
-            callback=self._on_speaking_start,
-        )
-        self.plugin_base.connect_to_event(
-            event_id=f"{self.plugin_base.get_plugin_id()}::{SPEAKING_STOP}",
-            callback=self._on_speaking_stop,
-        )
-        self.plugin_base.connect_to_event(
-            event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_CREATE}",
-            callback=self._on_voice_state_create,
-        )
-        self.plugin_base.connect_to_event(
-            event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_DELETE}",
-            callback=self._on_voice_state_delete,
-        )
-        # Subscribe to the configured channel and fetch initial state
-        self._start_watching_configured_channel()
+        if not self._events_connected:
+            self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_CHANNEL_SELECT}",
+                callback=self._on_voice_channel_select,
+            )
+            self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{GET_CHANNEL}",
+                callback=self._on_get_channel,
+            )
+            self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{GET_GUILD}",
+                callback=self._on_get_guild,
+            )
+            self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{SPEAKING_START}",
+                callback=self._on_speaking_start,
+            )
+            self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{SPEAKING_STOP}",
+                callback=self._on_speaking_stop,
+            )
+            self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_CREATE}",
+                callback=self._on_voice_state_create,
+            )
+            self.plugin_base.connect_to_event(
+                event_id=f"{self.plugin_base.get_plugin_id()}::{VOICE_STATE_DELETE}",
+                callback=self._on_voice_state_delete,
+            )
+            self._events_connected = True
 
-        # Request current voice channel so _connected_channel_id is set if
-        # we're already in a channel when StreamController starts.
-        if self.backend:
-            self.backend.request_current_voice_channel()
+        # Start a short-lived retry loop so startup ordering (settings/backend/auth)
+        # does not leave the action without initial guild/channel state.
+        self._schedule_startup_sync()
+
+    def _schedule_startup_sync(self):
+        if self._startup_sync_source_id is not None:
+            return
+        self._startup_sync_attempts = 0
+        self._startup_sync_source_id = GLib.timeout_add(250, self._run_startup_sync)
+
+    def _run_startup_sync(self):
+        self._startup_sync_attempts += 1
+
+        configured_channel = self._channel_row.get_value()
+        if configured_channel:
+            self._start_watching_configured_channel()
+
+            if self.backend and not self._requested_initial_voice_state:
+                self.backend.request_current_voice_channel()
+                self._requested_initial_voice_state = True
+
+            self._render_button()
+            self._startup_sync_source_id = None
+            return False
+
+        if self._startup_sync_attempts >= 40:
+            self._startup_sync_source_id = None
+            return False
+        return True
 
 
     def _start_watching_configured_channel(self):
@@ -423,12 +459,6 @@ class ChangeVoiceChannel(DiscordCore):
         guild_text = self._guild_name or ""
         channel_text = self._channel_name or ""
 
-        # Clear both potential label positions if configured
-        if guild_position != "none":
-            self.set_label("", position=guild_position)
-        if channel_position != "none":
-            self.set_label("", position=channel_position)
-
         if connected:
             # Trigger fetches for any users who joined before avatars were loaded
             for uid in list(self._users):
@@ -482,9 +512,36 @@ class ChangeVoiceChannel(DiscordCore):
                 # Empty channel, no guild icon — show inactive voice icon.
                 super().display_icon()
 
-        # Render guild name label
-        if guild_text and guild_position != "none":
-            guild_font_size = int(self._guild_label_font_size_row.get_value())
+        self._render_labels(guild_text, guild_position, channel_text, channel_position)
+
+    def _render_labels(
+        self,
+        guild_text: str,
+        guild_position: str,
+        channel_text: str,
+        channel_position: str,
+    ):
+        guild_font_size = int(self._guild_label_font_size_row.get_value())
+        channel_font_size = int(self._channel_label_font_size_row.get_value())
+
+        # Clear stale label positions only when the target position changes.
+        if self._last_guild_label_position != "none" and self._last_guild_label_position != guild_position:
+            self.set_label("", position=self._last_guild_label_position)
+        if self._last_channel_label_position != "none" and self._last_channel_label_position != channel_position:
+            self.set_label("", position=self._last_channel_label_position)
+
+        # Update guild label only when text/font/position actually changed.
+        previous_guild_text, previous_guild_font = self._label_cache["guild"]
+        guild_needs_update = (
+            guild_position != "none"
+            and bool(guild_text)
+            and (
+                previous_guild_text != guild_text
+                or previous_guild_font != guild_font_size
+                or self._last_guild_label_position != guild_position
+            )
+        )
+        if guild_needs_update:
             self.set_label(
                 guild_text,
                 position=guild_position,
@@ -492,10 +549,24 @@ class ChangeVoiceChannel(DiscordCore):
                 outline_width=2,
                 outline_color=[0, 0, 0, 255],
             )
+            self._label_cache["guild"] = (guild_text, guild_font_size)
+        elif guild_position == "none" or not guild_text:
+            if self._last_guild_label_position != "none":
+                self.set_label("", position=self._last_guild_label_position)
+            self._label_cache["guild"] = ("", guild_font_size)
 
-        # Render channel name label
-        if channel_text and channel_position != "none":
-            channel_font_size = int(self._channel_label_font_size_row.get_value())
+        # Update channel label only when text/font/position actually changed.
+        previous_channel_text, previous_channel_font = self._label_cache["channel"]
+        channel_needs_update = (
+            channel_position != "none"
+            and bool(channel_text)
+            and (
+                previous_channel_text != channel_text
+                or previous_channel_font != channel_font_size
+                or self._last_channel_label_position != channel_position
+            )
+        )
+        if channel_needs_update:
             self.set_label(
                 channel_text,
                 position=channel_position,
@@ -503,6 +574,14 @@ class ChangeVoiceChannel(DiscordCore):
                 outline_width=2,
                 outline_color=[0, 0, 0, 255],
             )
+            self._label_cache["channel"] = (channel_text, channel_font_size)
+        elif channel_position == "none" or not channel_text:
+            if self._last_channel_label_position != "none":
+                self.set_label("", position=self._last_channel_label_position)
+            self._label_cache["channel"] = ("", channel_font_size)
+
+        self._last_guild_label_position = guild_position
+        self._last_channel_label_position = channel_position
 
 
     def create_generative_ui(self):
@@ -596,6 +675,10 @@ class ChangeVoiceChannel(DiscordCore):
         self._guild_id = None
         self._channel_name = None
         self._watching_channel_id = None
+        self._last_guild_label_position = "none"
+        self._last_channel_label_position = "none"
+        self._label_cache["guild"] = ("", 0)
+        self._label_cache["channel"] = ("", 0)
         self._users.clear()
         self._speaking.clear()
         self._fetching_avatars.clear()
