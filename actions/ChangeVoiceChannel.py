@@ -156,6 +156,13 @@ class ChangeVoiceChannel(DiscordCore):
             )
             self._events_connected = True
 
+        # Invalidate label cache on every on_ready call — the framework clears button
+        # labels when switching pages, so cached values are stale on return.
+        self._label_cache["guild"] = ("", 0)
+        self._label_cache["channel"] = ("", 0)
+        self._last_guild_label_position = "none"
+        self._last_channel_label_position = "none"
+
         # Start a short-lived retry loop so startup ordering (settings/backend/auth)
         # does not leave the action without initial guild/channel state.
         self._schedule_startup_sync()
